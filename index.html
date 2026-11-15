@@ -203,8 +203,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 const fmt = (v) => new Intl.NumberFormat("ru-RU", { minimumFractionDigits: Number.isInteger(+v) ? 0 : 2, maximumFractionDigits: 2 }).format(Math.abs(+v));
 const money = (v, c) => `${fmt(v)} ${SYM[c] || c}`;
 const signed = (v, c) => (v < 0 ? "−" : v > 0 ? "+" : "") + money(v, c);
+const round = (v) => Math.round(+v); // для плиток — без копеек, чтобы влезало
 const compact = (v) => v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(".", ",")} млн`
-                    : v >= 1e3 ? `${Math.round(v / 1e3)} тыс` : String(Math.round(v));
+                    : v >= 1e3 ? `${+(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)} тыс`.replace(".", ",") : String(Math.round(v));
 
 function msk(d) {
   const o = {};
@@ -315,9 +316,9 @@ function render() {
         <button data-act="month" data-v="1" aria-label="Следующий месяц" ${isCur ? "disabled" : ""}>›</button>
       </div>
       <div class="stats">
-        <div class="stat"><div class="k"><i class="dot" style="background:var(--inc)"></i>Доходы</div><div class="v num">+${money(inc, cur)}</div></div>
-        <div class="stat"><div class="k"><i class="dot" style="background:var(--exp)"></i>Расходы</div><div class="v num">−${money(exp, cur)}</div></div>
-        <div class="stat"><div class="k">Итог</div><div class="v num">${signed(inc - exp, cur)}</div></div>
+        <div class="stat"><div class="k"><i class="dot" style="background:var(--inc)"></i>Доходы</div><div class="v num">+${money(round(inc), cur)}</div></div>
+        <div class="stat"><div class="k"><i class="dot" style="background:var(--exp)"></i>Расходы</div><div class="v num">−${money(round(exp), cur)}</div></div>
+        <div class="stat"><div class="k">Итог</div><div class="v num">${signed(round(inc) - round(exp), cur)}</div></div>
       </div>
     </section>
 
@@ -397,7 +398,7 @@ function operations(items) {
 function niceMax(v) {
   if (v <= 0) return 1;
   const p = Math.pow(10, Math.floor(Math.log10(v)));
-  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v * 1.05) return m * p;
   return 10 * p;
 }
 function barPath(x, y, w, h, r = 4) {
