@@ -85,7 +85,7 @@
   .mnav button:disabled { opacity: .25; cursor: default; }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
   .stat { background: var(--chip); border-radius: 12px; padding: 10px; min-width: 0; }
-  .stat .v { font-weight: 650; font-size: 15px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat .v { font-weight: 650; font-size: 14px; letter-spacing: -.01em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .stat .k { display: flex; align-items: center; gap: 5px; color: var(--hint); font-size: 12px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 
@@ -209,7 +209,7 @@ const WEEKDAYS = ["воскресенье","понедельник","вторн�
 const CATS = {
   expense: [["Еда","🍔"],["Транспорт","🚕"],["Покупки","🛍️"],["Жильё","🏠"],["Аренда зала","🏟️"],["Связь","📱"],["Подписки","🔁"],
             ["Здоровье","💊"],["Спорт","🏋️"],["Развлечения","🎉"],["Красота","💇"],["Подарки","🎁"],["Долги","💳"],["Прочее","📦"]],
-  income:  [["Ученики","🧑‍🎓"],["Зарплата","💼"],["Фитнес-зал","🏋️"],["Подработка","💻"],["Возврат","↩️"],["Подарки","🎁"],["Проценты","📈"],["Прочие доходы","💰"]],
+  income:  [["Ученики","🎓"],["Зарплата","💼"],["Фитнес-зал","🏋️"],["Подработка","💻"],["Возврат","↩️"],["Подарки","🎁"],["Проценты","📈"],["Прочие доходы","💰"]],
 };
 const GROUPS = ["7–10", "11+"];
 const PAY_DEADLINE = 10; // оплата с 1 по 10 число
@@ -377,6 +377,7 @@ function overview(items, inc, exp) {
     ? `<section class="card"><div class="empty" style="padding:20px 8px"><div class="e">🪙</div>В этом месяце записей нет.<br>Нажми «Добавить запись» или напиши боту <code>350 кофе</code></div></section>`
     : "";
   return `${empty}
+    ${monthSummary(inc, exp)}
     ${categoryBlock(items, "expense", exp, "Расходы по категориям")}
     ${categoryBlock(items, "income", inc, "Доходы по категориям")}
     <section class="card"><h2>Последние 6 месяцев</h2>
@@ -384,6 +385,36 @@ function overview(items, inc, exp) {
       <div class="chart" id="chart"></div>
     </section>
     ${recurringBlock()}`;
+}
+
+// Итог месяца + сколько ещё должны ученики
+function studentStats() {
+  const d = state.data;
+  const paid = new Map((d.payments || []).map((p) => [p.student_id, p]));
+  const list = (d.students || []).filter((s) => s.active || paid.has(s.id));
+  const unpaid = list.filter((s) => !paid.has(s.id));
+  return { paid, list, unpaid, rest: unpaid.reduce((s, x) => s + +x.fee, 0) };
+}
+
+function monthSummary(inc, exp) {
+  if (!inc && !exp) return "";
+  const cur = state.cur;
+  const { unpaid, rest } = cur === "RUB" ? studentStats() : { unpaid: [], rest: 0 };
+  const showStudents = unpaid.length && state.ym <= curYm();
+  const late = state.ym < curYm() || +today().slice(8) > PAY_DEADLINE;
+  return `<section class="card"><h2>Итог месяца</h2>
+    <div class="row1" style="padding:3px 0"><span>Получено</span><span class="amt num inc">+${money(inc, cur)}</span></div>
+    <div class="row1" style="padding:3px 0"><span>Потрачено</span><span class="amt num">−${money(exp, cur)}</span></div>
+    <div class="rec-sum num" style="font-size:17px"><span>Остаток</span><span>${signed(inc - exp, cur)}</span></div>
+    ${showStudents ? `
+      <button class="catrow" data-act="tab" data-v="students" style="margin-top:8px;padding:10px 0 2px;border-top:0.5px solid var(--sep)">
+        <span class="ico">${late ? "⚠️" : "⏳"}</span>
+        <div class="grow">
+          <div class="row1"><span class="name">Не оплатили: ${unpaid.length} уч.</span><span class="amt num" style="${late ? "color:var(--danger)" : ""}">${money(rest, "RUB")}</span></div>
+          <div class="hint">Если все оплатят — остаток ${signed(inc + rest - exp, cur)}</div>
+        </div>
+      </button>` : ""}
+  </section>`;
 }
 
 function recurringBlock() {
@@ -411,7 +442,7 @@ function studentsTab() {
   const paid = new Map((d.payments || []).map((p) => [p.student_id, +p.amount]));
   const list = (d.students || []).filter((s) => s.active || paid.has(s.id));
   if (!list.length) {
-    return `<div class="empty"><div class="e">🧑‍🎓</div>Учеников пока нет<br><button class="retry" data-act="st-new">Добавить ученика</button></div>`;
+    return `<div class="empty"><div class="e">🎓</div>Учеников пока нет<br><button class="retry" data-act="st-new">Добавить ученика</button></div>`;
   }
   const cur = curYm(), day = +today().slice(8);
   const phase = ym < cur ? "past" : ym > cur ? "future" : day <= PAY_DEADLINE ? "window" : "late";
@@ -596,17 +627,60 @@ function openStudentSheet(st) {
     grp: st ? st.grp : GROUPS[0],
     fee: st ? String(+st.fee).replace(".", ",") : "",
     active: st ? st.active : true,
+    edit: !st,                                   // новый — сразу форма данных
+    payAmount: st ? String(+st.fee).replace(".", ",") : "",
   };
   showSheet();
   if (!st) setTimeout(() => $sheet.querySelector("#st-name")?.focus(), 250);
 }
 
+const sheetPayment = () => {
+  const s = state.sheet;
+  return s && s.id ? (state.data.payments || []).find((p) => p.student_id === s.id) : null;
+};
+
 function renderStudentSheet() {
   const s = state.sheet;
-  const groups = [...new Set([...GROUPS, ...(state.data.students || []).map((x) => x.grp), s.grp])];
   $sheet.className = "open";
+  if (!s.id) { $sheet.innerHTML = studentForm(s, "Новый ученик"); return; }
+
+  const st = state.data.students.find((x) => x.id === s.id) || s;
+  const p = sheetPayment();
+  const mon = MONTHS_GEN[+state.ym.slice(5) - 1];
+  const phase = state.ym < curYm() ? "past" : state.ym > curYm() ? "future" : +today().slice(8) <= PAY_DEADLINE ? "window" : "late";
+  const payBlock = p
+    ? `<div class="card" style="text-align:center;padding:22px 16px">
+         <div style="font-size:44px;line-height:1">✅</div>
+         <div style="font-size:20px;font-weight:700;margin-top:8px" class="num">${money(p.amount, "RUB")}</div>
+         <div class="hint" style="margin-top:4px">Оплачено за ${MONTHS[+state.ym.slice(5) - 1].toLowerCase()}${p.paid_at ? ` · ${new Date(p.paid_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" })}` : ""}</div>
+       </div>
+       <button class="del" data-sact="unpay">Снять оплату</button>`
+    : `<div class="card" style="padding:16px">
+         <div class="hint">${phase === "late" ? "⚠️ Срок оплаты (до 10-го) прошёл" : phase === "past" ? "За этот месяц оплаты нет" : `Оплата с 1 по ${PAY_DEADLINE} ${mon}`}</div>
+         <div class="amount" style="padding:12px 0 4px">
+           <input id="pay-amt" inputmode="decimal" autocomplete="off" value="${esc(s.payAmount)}" aria-label="Сумма оплаты">
+           <span class="sym">₽</span>
+         </div>
+         <div class="hint" style="text-align:center">Обычная сумма — ${money(st.fee, "RUB")}. Можно изменить, если заплатил другую.</div>
+       </div>
+       <button class="savebtn" data-sact="pay" style="background:var(--inc)">✓ Оплатил</button>`;
+
   $sheet.innerHTML = `
-    <h2 style="margin:6px 4px 4px;font-size:20px">${s.id ? "Ученик" : "Новый ученик"}</h2>
+    <div style="padding:6px 4px 0">
+      <div style="font-size:22px;font-weight:700">${esc(st.name)}</div>
+      <div class="hint" style="margin-top:2px">Группа ${esc(st.grp)} · ${money(st.fee, "RUB")} в месяц${st.active ? "" : " · не ходит"}</div>
+    </div>
+    <div class="field-label">${MONTHS[+state.ym.slice(5) - 1]} ${state.ym.slice(0, 4)}</div>
+    ${payBlock}
+    ${s.edit
+      ? studentForm(s, "Данные ученика", true)
+      : `<button class="addbtn" data-sact="edit">✏️ Изменить данные ученика</button>`}`;
+}
+
+function studentForm(s, title, inline = false) {
+  const groups = [...new Set([...GROUPS, ...(state.data.students || []).map((x) => x.grp), s.grp])];
+  return `
+    <h2 style="margin:${inline ? "24px" : "6px"} 4px 4px;font-size:${inline ? "17px" : "20px"}">${title}</h2>
     <div class="field-label">Имя и фамилия</div>
     <input id="st-name" class="inp" maxlength="80" autocomplete="off" placeholder="Например, Иванов Иван" value="${esc(s.name)}">
     <div class="field-label">Группа</div>
@@ -620,7 +694,41 @@ function renderStudentSheet() {
         <button data-sact="active" data-v="0" aria-pressed="${!s.active}">Не ходит</button>
       </div>
       <div class="hint" style="margin:8px 4px">Кто не ходит — скрывается из списка, история оплат сохраняется. Новая сумма оплаты действует для следующих отметок.</div>` : ""}
-    <button class="savebtn" data-sact="save">Сохранить</button>`;
+    ${inline
+      ? `<button class="addbtn" data-sact="save-st">Сохранить данные</button>`
+      : `<button class="savebtn" data-sact="save">Сохранить</button>`}`;
+}
+
+async function payFromSheet() {
+  const s = state.sheet;
+  if (!s || busy || sheetPayment()) return;
+  const amount = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
+  if (!(amount > 0)) { haptic("error"); return alertMsg("Введи сумму оплаты"); }
+  busy = true; progress(true);
+  try {
+    await api("student_pay", { id: s.id, ym: state.ym, paid: true, amount });
+    haptic("success");
+    closeSheet();
+    await load();
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
+}
+
+function unpayFromSheet() {
+  const s = state.sheet;
+  const p = sheetPayment();
+  if (!s || !p || busy) return;
+  confirmMsg(`Снять оплату ${money(p.amount, "RUB")}? Доход за этот месяц будет удалён.`, async (ok) => {
+    if (!ok) return;
+    busy = true; progress(true);
+    try {
+      await api("student_pay", { id: s.id, ym: state.ym, paid: false });
+      haptic("success");
+      closeSheet();
+      await load();
+    } catch (e) { haptic("error"); alertMsg(e.message); }
+    finally { busy = false; progress(false); }
+  });
 }
 
 async function saveStudent() {
@@ -632,9 +740,16 @@ async function saveStudent() {
   try {
     await api("student_save", { student: { id: s.id, name: s.name, grp: s.grp, fee, active: s.active } });
     haptic("success");
-    closeSheet();
     state.tab = "students";
-    await load();
+    if (s.id) {                       // остаёмся в карточке, обновляем данные
+      s.edit = false;
+      s.payAmount = String(fee).replace(".", ",");
+      await load();
+      if (state.sheet) { renderSheet(); syncButtons(); }
+    } else {
+      closeSheet();
+      await load();
+    }
   } catch (e) { haptic("error"); alertMsg(e.message); }
   finally { busy = false; progress(false); }
 }
@@ -711,6 +826,12 @@ $sheet.addEventListener("input", (e) => {
   if (e.target.id === "note") s.note = e.target.value;
   if (e.target.id === "date") s.date = e.target.value || today();
   if (e.target.id === "st-name") s.name = e.target.value;
+  if (e.target.id === "pay-amt") {
+    const v = e.target.value.replace(/[^\d.,\s]/g, "");
+    if (v !== e.target.value) e.target.value = v;
+    s.payAmount = v;
+    syncButtons();
+  }
   if (e.target.id === "st-fee") {
     const v = e.target.value.replace(/[^\d.,\s]/g, "");
     if (v !== e.target.value) e.target.value = v;
@@ -730,6 +851,10 @@ $sheet.addEventListener("click", (e) => {
     case "cat": s.category = v; $sheet.querySelectorAll(".cat").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === v)); break;
     case "grp": s.grp = v; renderSheet(); break;
     case "active": s.active = v === "1"; renderSheet(); break;
+    case "edit": s.edit = true; renderSheet(); setTimeout(() => $sheet.querySelector("#st-name")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); break;
+    case "save-st": saveStudent(); break;
+    case "pay": payFromSheet(); break;
+    case "unpay": unpayFromSheet(); break;
     case "save": save(); break;
     case "delete": remove(); break;
   }
@@ -739,7 +864,11 @@ let busy = false;
 async function save() {
   const s = state.sheet;
   if (!s || busy) return;
-  if (s.type === "student") return saveStudent();
+  if (s.type === "student") {
+    if (!s.id) return saveStudent();
+    if (!sheetPayment()) return payFromSheet();
+    return closeSheet();
+  }
   const amount = parseFloat(s.amount.replace(/\s/g, "").replace(",", "."));
   if (!(amount > 0)) { haptic("error"); return alertMsg("Введи сумму"); }
   if (!s.category) { haptic("error"); return alertMsg("Выбери категорию"); }
@@ -822,7 +951,13 @@ function syncButtons() {
   if (!tg) return;
   try {
     if (state.sheet) {
-      tg.MainButton.setParams({ text: state.sheet.id && state.sheet.type === "tx" ? "Сохранить изменения" : "Сохранить", is_visible: true, is_active: true });
+      const s = state.sheet;
+      let text = s.id ? "Сохранить изменения" : "Сохранить";
+      if (s.type === "student" && s.id) {
+        const amt = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
+        text = sheetPayment() ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
+      } else if (s.type === "student") text = "Добавить ученика";
+      tg.MainButton.setParams({ text, is_visible: true, is_active: true });
       tg.BackButton.show();
     } else {
       tg.MainButton.setParams({ text: "＋ Добавить запись", is_visible: true, is_active: true });
