@@ -324,9 +324,7 @@ function render() {
 
   $app.innerHTML = `
     <header class="hero">
-      <div class="label">Баланс</div>
-      <div class="big num">${signed(balance, cur)}</div>
-      ${others.length ? `<div class="others num">${others.join(" · ")}</div>` : ""}
+      ${heroBlock(balance, others, inc - exp)}
       ${curs.length > 1 ? `<div class="chips">${curs.map((c) => `<button class="chip" data-act="cur" data-v="${c}" aria-pressed="${c === cur}">${SYM[c] || c} ${c}</button>`).join("")}</div>` : ""}
     </header>
 
@@ -352,6 +350,21 @@ function render() {
     ${state.tab === "overview" ? overview(items, inc, exp) : state.tab === "ops" ? operations(items) : studentsTab()}
   `;
   if (state.tab === "overview") drawChart();
+}
+
+// До даты старта общий баланс не считается — вместо него итог выбранного месяца.
+function heroBlock(balance, others, monthNet) {
+  const from = state.data.balance_from; // 'YYYY-MM-DD'
+  if (from && today() < from) {
+    const [, m, d] = from.split("-").map(Number);
+    return `<div class="label">Итог · ${ymTitle(state.ym)}</div>
+      <div class="big num">${signed(monthNet, state.cur)}</div>
+      <div class="others">Общий баланс считается с ${d} ${MONTHS_GEN[m - 1]}</div>`;
+  }
+  const since = from ? (() => { const [y, m, d] = from.split("-").map(Number); return ` с ${d} ${MONTHS_GEN[m - 1]} ${y}`; })() : "";
+  return `<div class="label">Баланс${since}</div>
+    <div class="big num">${signed(balance, state.cur)}</div>
+    ${others.length ? `<div class="others num">${others.join(" · ")}</div>` : ""}`;
 }
 
 function categoryBlock(items, kind, total, title) {
