@@ -213,7 +213,7 @@ const CATS = {
             ["Аптека","💊"],["Кредит","💳"],["Интернет","🌐"],["Мобильный","📱"],["Другое","📦"]],
   income:  [["Ученики","🎓"],["Зарплата","💼"],["Фитнес-зал","💪"],["Другое","📦"]],
 };
-const GROUPS = ["7–10", "11+"];
+const GROUPS = ["7–10", "11+", "Школа"];
 const PAY_DEADLINE = 10; // оплата с 1 по 10 число
 const ICONS = Object.fromEntries([...CATS.expense, ...CATS.income]);
 const icon = (c) => ICONS[c] || "🏷️";
@@ -511,7 +511,84 @@ function studentsTab() {
       <button class="chip" data-act="stf" data-v="unpaid" aria-pressed="${state.stFilter === "unpaid"}">Не оплатили · ${unpaid.length}</button>
     </div>` : ""}
     ${blocks || `<div class="empty">Все оплатили 🎉</div>`}
-    <button class="addbtn" data-act="st-new">＋ Добавить ученика</button>`;
+    <button class="addbtn" data-act="st-new">＋ Добавить ученика</button>
+    ${clientsBlock()}`;
+}
+
+// ---------- фитнес: персональные клиенты ----------
+function clientRemainText(c) {
+  const r = +c.remaining;
+  if (r > 0) return `<span class="s">Осталось <b>${r}</b> из ${c.sessions} тренировок</span>`;
+  if (r === 0) return `<span class="s late">Пакет закончился — ждём оплату ${money(c.price, "RUB")}</span>`;
+  return `<span class="s late">В долг ${-r} трен. — ждём оплату ${money(c.price, "RUB")}</span>`;
+}
+
+function clientsBlock() {
+  const list = (state.data.clients || []).filter((c) => c.active);
+  if (!list.length) return "";
+  return `<div class="day" style="margin-top:24px">
+    <div class="dayhead"><span>🏋️ Фитнес · персональные</span><span>${money(list[0].price, "RUB")} = ${list[0].sessions} трен.</span></div>
+    <div class="list">${list.map((c) => `
+      <div class="tx strow">
+        <button class="st-info" data-act="cl-open" data-v="${c.id}">
+          <div class="t">${esc(c.name)}</div>
+          <div class="s">${clientRemainText(c)}</div>
+        </button>
+        <button class="chip" data-act="cl-ses" data-v="${c.id}" style="flex:none">＋ трен.</button>
+      </div>`).join("")}
+    </div></div>`;
+}
+
+const clBusy = new Set();
+async function clientAction(action, payload, okMsg) {
+  const key = action + JSON.stringify(payload);
+  if (clBusy.has(key)) return;
+  clBusy.add(key);
+  try {
+    await api(action, payload);
+    haptic("success");
+    await load();
+    if (state.sheet && state.sheet.type === "client") { renderSheet(); syncButtons(); }
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { clBusy.delete(key); }
+}
+
+function openClientSheet(id) {
+  state.sheet = { type: "client", id };
+  showSheet();
+}
+
+function renderClientSheet() {
+  const s = state.sheet;
+  const c = (state.data.clients || []).find((x) => x.id === s.id);
+  $sheet.className = "open";
+  if (!c) { $sheet.innerHTML = `<div class="empty">Клиент не найден</div>`; return; }
+  const ses = (state.data.client_sessions || []).filter((x) => x.client_id === c.id).slice(0, 20);
+  const pays = (state.data.client_payments || []).filter((x) => x.client_id === c.id).slice(0, 10);
+  const dt = (iso) => new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
+  const r = +c.remaining;
+  $sheet.innerHTML = `
+    <div style="padding:6px 4px 0">
+      <div style="font-size:22px;font-weight:700">${esc(c.name)}</div>
+      <div class="hint" style="margin-top:2px">Пакет ${money(c.price, "RUB")} = ${c.sessions} тренировок</div>
+    </div>
+    <div class="card" style="text-align:center;padding:20px 16px">
+      <div class="num" style="font-size:44px;font-weight:800;line-height:1;${r <= 0 ? "color:var(--danger)" : ""}">${r}</div>
+      <div class="hint" style="margin-top:6px">${r >= 0 ? "осталось тренировок" : "тренировок в долг"} · проведено всего ${c.done}</div>
+    </div>
+    <button class="addbtn" data-sact="cl-pay" style="color:var(--inc-text)">💰 Оплатил пакет · ${money(c.price, "RUB")}</button>
+    <div class="field-label">Тренировки</div>
+    <div class="list">${ses.length ? ses.map((x) => `
+      <div class="tx strow"><span class="grow">🏋️ ${dt(x.done_at)}</span>
+        <button class="chip" data-sact="cl-del-ses" data-v="${x.id}" aria-label="Удалить тренировку">✕</button></div>`).join("")
+      : `<div class="tx strow"><span class="hint">Пока нет</span></div>`}</div>
+    <div class="field-label">Оплаты</div>
+    <div class="list">${pays.length ? pays.map((x) => `
+      <div class="tx strow"><span class="grow">💰 ${dt(x.created_at)} · ${x.sessions} трен.</span>
+        <span class="amt num inc" style="margin-right:8px">+${money(x.amount, "RUB")}</span>
+        <button class="chip" data-sact="cl-del-pay" data-v="${x.id}" aria-label="Удалить оплату">✕</button></div>`).join("")
+      : `<div class="tx strow"><span class="hint">Пока нет</span></div>`}</div>
+    <button class="savebtn" data-sact="cl-ses">＋ Тренировка</button>`;
 }
 
 const payBusy = new Set();
@@ -803,6 +880,7 @@ function closeSheet() {
 function renderSheet() {
   const s = state.sheet;
   if (s.type === "student") return renderStudentSheet();
+  if (s.type === "client") return renderClientSheet();
   const list = CATS[s.kind].slice();
   if (s.category && !list.some(([c]) => c === s.category)) list.unshift([s.category, icon(s.category)]);
   $sheet.className = `open kind-${s.kind === "income" ? "inc" : "exp"}`;
@@ -870,6 +948,14 @@ $sheet.addEventListener("click", (e) => {
     case "save-st": saveStudent(); break;
     case "pay": payFromSheet(); break;
     case "unpay": unpayFromSheet(); break;
+    case "cl-ses": clientAction("client_session", { id: s.id }); break;
+    case "cl-pay": {
+      const c = (state.data.clients || []).find((x) => x.id === s.id);
+      confirmMsg(`${c ? c.name : "Клиент"} оплатил пакет ${c ? money(c.price, "RUB") : ""}?`, (ok) => ok && clientAction("client_pay", { id: s.id }));
+      break;
+    }
+    case "cl-del-ses": confirmMsg("Удалить эту тренировку?", (ok) => ok && clientAction("client_session_delete", { session_id: +v })); break;
+    case "cl-del-pay": confirmMsg("Удалить эту оплату? Доход тоже удалится.", (ok) => ok && clientAction("client_pay_delete", { payment_id: +v })); break;
     case "save": save(); break;
     case "delete": remove(); break;
   }
@@ -879,6 +965,7 @@ let busy = false;
 async function save() {
   const s = state.sheet;
   if (!s || busy) return;
+  if (s.type === "client") return clientAction("client_session", { id: s.id });
   if (s.type === "student") {
     if (!s.id) return saveStudent();
     if (!sheetPayment()) return payFromSheet();
@@ -938,6 +1025,8 @@ $app.addEventListener("click", (e) => {
     case "pay": togglePay(+v); break;
     case "stf": state.stFilter = v; haptic("select"); render(); break;
     case "st-new": openStudentSheet(null); break;
+    case "cl-open": openClientSheet(+v); break;
+    case "cl-ses": clientAction("client_session", { id: +v }); break;
     case "st-edit": {
       const st = (state.data.students || []).find((x) => String(x.id) === v);
       if (st) openStudentSheet(st);
@@ -972,6 +1061,7 @@ function syncButtons() {
         const amt = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
         text = sheetPayment() ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
       } else if (s.type === "student") text = "Добавить ученика";
+      if (s.type === "client") text = "＋ Тренировка";
       tg.MainButton.setParams({ text, is_visible: true, is_active: true });
       tg.BackButton.show();
     } else {
