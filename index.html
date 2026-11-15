@@ -171,6 +171,22 @@
   }
   .inp:focus { box-shadow: 0 0 0 2px var(--accent) inset; }
   .del { display: block; width: 100%; margin-top: 24px; padding: 13px; border-radius: 12px; background: var(--card); color: var(--danger); font-weight: 600; }
+  .amt.inc { color: var(--inc-text); }
+  .big2 { font-size: 26px; font-weight: 700; margin: 2px 0 10px; letter-spacing: -.01em; }
+  .big2 .hint { font-size: 15px; font-weight: 500; }
+  .check { width: 44px; height: 44px; margin: -7px -4px -7px -10px; display: grid; place-items: center; flex: none; }
+  .check .ring {
+    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--hint); display: grid; place-items: center;
+    color: transparent; font-weight: 800; font-size: 15px; transition: background .15s, border-color .15s;
+  }
+  .check.on .ring { background: var(--inc); border-color: var(--inc); color: #fff; }
+  .strow { cursor: default; }
+  .strow:active { background: none; }
+  .st-info { flex: 1; min-width: 0; text-align: left; }
+  .s.late { color: var(--danger); }
+  .s.ok { color: var(--inc-text); }
+  .addbtn { display: block; width: 100%; margin-top: 16px; padding: 13px; border-radius: 12px; background: var(--card); color: var(--link); font-weight: 600; }
+  .rec-sum { display: flex; justify-content: space-between; border-top: 0.5px solid var(--sep); margin-top: 6px; padding-top: 10px; font-weight: 600; }
   .savebtn { display: none; width: 100%; margin-top: 20px; padding: 14px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
   .no-tg .savebtn { display: block; }
 </style>
@@ -191,10 +207,12 @@ const MONTHS_GEN = ["января","февраля","марта","апреля",
 const MONTHS_SHORT = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
 const WEEKDAYS = ["воскресенье","понедельник","вторник","среда","четверг","пятница","суббота"];
 const CATS = {
-  expense: [["Еда","🍔"],["Транспорт","🚕"],["Покупки","🛍️"],["Жильё","🏠"],["Связь","📱"],["Подписки","🔁"],
+  expense: [["Еда","🍔"],["Транспорт","🚕"],["Покупки","🛍️"],["Жильё","🏠"],["Аренда зала","🏟️"],["Связь","📱"],["Подписки","🔁"],
             ["Здоровье","💊"],["Спорт","🏋️"],["Развлечения","🎉"],["Красота","💇"],["Подарки","🎁"],["Долги","💳"],["Прочее","📦"]],
-  income:  [["Зарплата","💼"],["Подработка","💻"],["Возврат","↩️"],["Подарки","🎁"],["Проценты","📈"],["Прочие доходы","💰"]],
+  income:  [["Ученики","🧑‍🎓"],["Зарплата","💼"],["Фитнес-зал","🏋️"],["Подработка","💻"],["Возврат","↩️"],["Подарки","🎁"],["Проценты","📈"],["Прочие доходы","💰"]],
 };
+const GROUPS = ["7–10", "11+"];
+const PAY_DEADLINE = 10; // оплата с 1 по 10 число
 const ICONS = Object.fromEntries([...CATS.expense, ...CATS.income]);
 const icon = (c) => ICONS[c] || "🏷️";
 
@@ -230,7 +248,8 @@ function dayTitle(day) {
 
 // ---------- состояние ----------
 const state = { ym: curYm(), cur: "RUB", tab: "overview", cat: null, data: null, error: null, loading: false, sheet: null };
-try { const t = localStorage.getItem("fin.tab"); if (t === "overview" || t === "ops") state.tab = t; } catch {}
+state.stFilter = "all";
+try { const t = localStorage.getItem("fin.tab"); if (["overview", "ops", "students"].includes(t)) state.tab = t; } catch {}
 
 async function api(action, payload = {}) {
   let r;
@@ -324,10 +343,11 @@ function render() {
 
     <div class="seg" role="tablist">
       <button data-act="tab" data-v="overview" aria-pressed="${state.tab === "overview"}">Обзор</button>
-      <button data-act="tab" data-v="ops" aria-pressed="${state.tab === "ops"}">Операции${items.length ? ` · ${items.length}` : ""}</button>
+      <button data-act="tab" data-v="ops" aria-pressed="${state.tab === "ops"}">Операции</button>
+      <button data-act="tab" data-v="students" aria-pressed="${state.tab === "students"}">Ученики</button>
     </div>
 
-    ${state.tab === "overview" ? overview(items, inc, exp) : operations(items)}
+    ${state.tab === "overview" ? overview(items, inc, exp) : state.tab === "ops" ? operations(items) : studentsTab()}
   `;
   if (state.tab === "overview") drawChart();
 }
@@ -362,7 +382,110 @@ function overview(items, inc, exp) {
     <section class="card"><h2>Последние 6 месяцев</h2>
       <div class="legend"><span><i style="background:var(--inc)"></i>Доходы</span><span><i style="background:var(--exp)"></i>Расходы</span></div>
       <div class="chart" id="chart"></div>
-    </section>`;
+    </section>
+    ${recurringBlock()}`;
+}
+
+function recurringBlock() {
+  const rec = (state.data.recurring || []).filter((r) => r.active && r.currency === state.cur);
+  if (!rec.length) return "";
+  const inc = rec.filter((r) => r.kind === "income").reduce((s, r) => s + +r.amount, 0);
+  const exp = rec.filter((r) => r.kind === "expense").reduce((s, r) => s + +r.amount, 0);
+  return `<section class="card"><h2>Каждый месяц автоматически</h2>
+    ${rec.map((r) => `
+      <div class="catrow">
+        <span class="ico">${icon(r.category)}</span>
+        <div class="grow"><div class="row1">
+          <span class="name">${esc(r.note || r.category)}</span>
+          <span class="amt num ${r.kind === "income" ? "inc" : ""}">${r.kind === "income" ? "+" : "−"}${money(r.amount, r.currency)}</span>
+        </div></div>
+      </div>`).join("")}
+    <div class="rec-sum num"><span>+${money(inc, state.cur)} − ${money(exp, state.cur)}</span><span>${signed(inc - exp, state.cur)}</span></div>
+    <div class="hint" style="margin-top:8px">Добавляются в начале каждого месяца. Если в каком-то месяце сумма другая — исправь запись в «Операциях».</div>
+  </section>`;
+}
+
+// ---------- ученики ----------
+function studentsTab() {
+  const d = state.data, ym = state.ym;
+  const paid = new Map((d.payments || []).map((p) => [p.student_id, +p.amount]));
+  const list = (d.students || []).filter((s) => s.active || paid.has(s.id));
+  if (!list.length) {
+    return `<div class="empty"><div class="e">🧑‍🎓</div>Учеников пока нет<br><button class="retry" data-act="st-new">Добавить ученика</button></div>`;
+  }
+  const cur = curYm(), day = +today().slice(8);
+  const phase = ym < cur ? "past" : ym > cur ? "future" : day <= PAY_DEADLINE ? "window" : "late";
+  const expected = list.reduce((s, x) => s + (paid.has(x.id) ? paid.get(x.id) : +x.fee), 0);
+  const got = [...paid.values()].reduce((s, v) => s + v, 0);
+  const unpaid = list.filter((x) => !paid.has(x.id));
+  const rest = unpaid.reduce((s, x) => s + +x.fee, 0);
+  const mon = MONTHS_GEN[+ym.slice(5) - 1];
+
+  let status;
+  if (!unpaid.length) status = "✅ Все оплатили";
+  else if (phase === "window") status = `⏳ Оплата с 1 по ${PAY_DEADLINE} ${mon}. Ждём ещё ${unpaid.length} · ${money(rest, "RUB")}`;
+  else if (phase === "future") status = `Оплата с 1 по ${PAY_DEADLINE} ${mon}`;
+  else status = `<span style="color:var(--danger)">⚠️ Срок прошёл — не оплатили ${unpaid.length} · ${money(rest, "RUB")}</span>`;
+
+  const unpaidLabel = phase === "window" ? `ждём до ${PAY_DEADLINE}-го` : phase === "late" ? "просрочено" : phase === "past" ? "не оплачено" : "";
+  const shown = state.stFilter === "unpaid" ? unpaid : list;
+
+  const groups = [...new Set([...GROUPS, ...list.map((x) => x.grp)])];
+  const blocks = groups.map((g) => {
+    const all = list.filter((x) => x.grp === g);
+    const rows = shown.filter((x) => x.grp === g);
+    if (!rows.length) return "";
+    const pc = all.filter((x) => paid.has(x.id)).length;
+    const gGot = all.reduce((s, x) => s + (paid.get(x.id) || 0), 0);
+    return `<div class="day">
+      <div class="dayhead"><span>Группа ${esc(g)}</span><span class="num">${pc}/${all.length} · ${money(gGot, "RUB")}</span></div>
+      <div class="list">${rows.map((x) => {
+        const on = paid.has(x.id);
+        const sub = on ? `<span class="s ok">✓ оплачено</span>` : `<span class="s ${phase === "late" ? "late" : ""}">${unpaidLabel}</span>`;
+        return `<div class="tx strow">
+          <button class="check ${on ? "on" : ""}" data-act="pay" data-v="${x.id}" aria-pressed="${on}" aria-label="Оплата: ${esc(x.name)}"><span class="ring">✓</span></button>
+          <button class="st-info" data-act="st-edit" data-v="${x.id}">
+            <div class="t">${esc(x.name)}${x.active ? "" : ' <span class="hint">(не ходит)</span>'}</div>
+            <div class="s">${sub}</div>
+          </button>
+          <span class="amt num">${money(on ? paid.get(x.id) : x.fee, "RUB")}</span>
+        </div>`;
+      }).join("")}</div></div>`;
+  }).join("");
+
+  return `
+    <section class="card">
+      <div class="row1"><span class="hint">Получено от учеников</span><span class="hint num">${paid.size} из ${list.length}</span></div>
+      <div class="big2 num">${money(got, "RUB")} <span class="hint">из ${money(expected, "RUB")}</span></div>
+      <div class="bar" style="height:8px;border-radius:4px"><i style="width:${expected ? Math.min(100, (got / expected) * 100) : 0}%;background:var(--inc);border-radius:4px"></i></div>
+      <div class="hint" style="margin-top:10px">${status}</div>
+    </section>
+    ${unpaid.length && unpaid.length < list.length ? `<div class="chips" style="margin-top:12px">
+      <button class="chip" data-act="stf" data-v="all" aria-pressed="${state.stFilter !== "unpaid"}">Все · ${list.length}</button>
+      <button class="chip" data-act="stf" data-v="unpaid" aria-pressed="${state.stFilter === "unpaid"}">Не оплатили · ${unpaid.length}</button>
+    </div>` : ""}
+    ${blocks || `<div class="empty">Все оплатили 🎉</div>`}
+    <button class="addbtn" data-act="st-new">＋ Добавить ученика</button>`;
+}
+
+const payBusy = new Set();
+function togglePay(id) {
+  const d = state.data;
+  const s = d.students.find((x) => x.id === id);
+  if (!s || payBusy.has(id)) return;
+  const isPaid = d.payments.some((p) => p.student_id === id);
+  const go = async () => {
+    payBusy.add(id);
+    if (isPaid) d.payments = d.payments.filter((p) => p.student_id !== id);
+    else d.payments.push({ student_id: id, amount: s.fee });
+    haptic(isPaid ? "select" : "success");
+    render();
+    try { await api("student_pay", { id, ym: state.ym, paid: !isPaid }); }
+    catch (e) { haptic("error"); alertMsg(e.message); }
+    finally { payBusy.delete(id); load(); }
+  };
+  if (isPaid) confirmMsg(`Снять отметку об оплате — ${s.name}? Доход ${money(s.fee, "RUB")} за этот месяц будет удалён.`, (ok) => ok && go());
+  else go();
 }
 
 function operations(items) {
@@ -465,8 +588,68 @@ function drawChart() {
 }
 
 // ---------- лист записи ----------
+function openStudentSheet(st) {
+  state.sheet = {
+    type: "student",
+    id: st ? st.id : null,
+    name: st ? st.name : "",
+    grp: st ? st.grp : GROUPS[0],
+    fee: st ? String(+st.fee).replace(".", ",") : "",
+    active: st ? st.active : true,
+  };
+  showSheet();
+  if (!st) setTimeout(() => $sheet.querySelector("#st-name")?.focus(), 250);
+}
+
+function renderStudentSheet() {
+  const s = state.sheet;
+  const groups = [...new Set([...GROUPS, ...(state.data.students || []).map((x) => x.grp), s.grp])];
+  $sheet.className = "open";
+  $sheet.innerHTML = `
+    <h2 style="margin:6px 4px 4px;font-size:20px">${s.id ? "Ученик" : "Новый ученик"}</h2>
+    <div class="field-label">Имя и фамилия</div>
+    <input id="st-name" class="inp" maxlength="80" autocomplete="off" placeholder="Например, Иванов Иван" value="${esc(s.name)}">
+    <div class="field-label">Группа</div>
+    <div class="seg" style="margin-top:0">${groups.map((g) => `<button data-sact="grp" data-v="${esc(g)}" aria-pressed="${g === s.grp}">${esc(g)}</button>`).join("")}</div>
+    <div class="field-label">Оплата в месяц, ₽</div>
+    <input id="st-fee" class="inp" inputmode="decimal" autocomplete="off" placeholder="4500" value="${esc(s.fee)}">
+    ${s.id ? `
+      <div class="field-label">Статус</div>
+      <div class="seg" style="margin-top:0">
+        <button data-sact="active" data-v="1" aria-pressed="${s.active}">Занимается</button>
+        <button data-sact="active" data-v="0" aria-pressed="${!s.active}">Не ходит</button>
+      </div>
+      <div class="hint" style="margin:8px 4px">Кто не ходит — скрывается из списка, история оплат сохраняется. Новая сумма оплаты действует для следующих отметок.</div>` : ""}
+    <button class="savebtn" data-sact="save">Сохранить</button>`;
+}
+
+async function saveStudent() {
+  const s = state.sheet;
+  const fee = parseFloat(String(s.fee).replace(/\s/g, "").replace(",", "."));
+  if (!s.name.trim()) { haptic("error"); return alertMsg("Введи имя и фамилию"); }
+  if (!(fee > 0)) { haptic("error"); return alertMsg("Введи сумму оплаты"); }
+  busy = true; progress(true);
+  try {
+    await api("student_save", { student: { id: s.id, name: s.name, grp: s.grp, fee, active: s.active } });
+    haptic("success");
+    closeSheet();
+    state.tab = "students";
+    await load();
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
+}
+
+function showSheet() {
+  renderSheet();
+  $sheet.classList.add("open");
+  $sheet.scrollTop = 0;
+  document.body.style.overflow = "hidden";
+  syncButtons();
+}
+
 function openSheet(tx) {
   state.sheet = {
+    type: "tx",
     id: tx ? tx.id : null,
     orig: tx || null,
     kind: tx ? tx.kind : "expense",
@@ -476,11 +659,7 @@ function openSheet(tx) {
     note: tx ? tx.note || "" : "",
     date: tx ? msk(new Date(tx.created_at)).day : today(),
   };
-  renderSheet();
-  $sheet.classList.add("open");
-  $sheet.scrollTop = 0;
-  document.body.style.overflow = "hidden";
-  syncButtons();
+  showSheet();
   if (!tx) setTimeout(() => $sheet.querySelector("#amt")?.focus(), 250);
 }
 
@@ -493,6 +672,7 @@ function closeSheet() {
 
 function renderSheet() {
   const s = state.sheet;
+  if (s.type === "student") return renderStudentSheet();
   const list = CATS[s.kind].slice();
   if (s.category && !list.some(([c]) => c === s.category)) list.unshift([s.category, icon(s.category)]);
   $sheet.className = `open kind-${s.kind === "income" ? "inc" : "exp"}`;
@@ -530,6 +710,12 @@ $sheet.addEventListener("input", (e) => {
   }
   if (e.target.id === "note") s.note = e.target.value;
   if (e.target.id === "date") s.date = e.target.value || today();
+  if (e.target.id === "st-name") s.name = e.target.value;
+  if (e.target.id === "st-fee") {
+    const v = e.target.value.replace(/[^\d.,\s]/g, "");
+    if (v !== e.target.value) e.target.value = v;
+    s.fee = v;
+  }
 });
 
 $sheet.addEventListener("click", (e) => {
@@ -542,6 +728,8 @@ $sheet.addEventListener("click", (e) => {
       break;
     case "cur": s.currency = v; renderSheet(); break;
     case "cat": s.category = v; $sheet.querySelectorAll(".cat").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === v)); break;
+    case "grp": s.grp = v; renderSheet(); break;
+    case "active": s.active = v === "1"; renderSheet(); break;
     case "save": save(); break;
     case "delete": remove(); break;
   }
@@ -551,6 +739,7 @@ let busy = false;
 async function save() {
   const s = state.sheet;
   if (!s || busy) return;
+  if (s.type === "student") return saveStudent();
   const amount = parseFloat(s.amount.replace(/\s/g, "").replace(",", "."));
   if (!(amount > 0)) { haptic("error"); return alertMsg("Введи сумму"); }
   if (!s.category) { haptic("error"); return alertMsg("Выбери категорию"); }
@@ -602,6 +791,14 @@ $app.addEventListener("click", (e) => {
       haptic("select"); render(); break;
     case "cat": state.cat = v; state.tab = "ops"; haptic("select"); render(); window.scrollTo(0, 0); break;
     case "clearcat": state.cat = null; render(); break;
+    case "pay": togglePay(+v); break;
+    case "stf": state.stFilter = v; haptic("select"); render(); break;
+    case "st-new": openStudentSheet(null); break;
+    case "st-edit": {
+      const st = (state.data.students || []).find((x) => String(x.id) === v);
+      if (st) openStudentSheet(st);
+      break;
+    }
     case "edit": {
       const tx = state.data.items.find((t) => String(t.id) === v);
       if (tx) openSheet(tx);
@@ -625,7 +822,7 @@ function syncButtons() {
   if (!tg) return;
   try {
     if (state.sheet) {
-      tg.MainButton.setParams({ text: state.sheet.id ? "Сохранить изменения" : "Сохранить", is_visible: true, is_active: true });
+      tg.MainButton.setParams({ text: state.sheet.id && state.sheet.type === "tx" ? "Сохранить изменения" : "Сохранить", is_visible: true, is_active: true });
       tg.BackButton.show();
     } else {
       tg.MainButton.setParams({ text: "＋ Добавить запись", is_visible: true, is_active: true });
