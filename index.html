@@ -354,15 +354,24 @@ function render() {
 
 // До даты старта общий баланс не считается — вместо него итог выбранного месяца.
 function heroBlock(balance, others, monthNet) {
-  const from = state.data.balance_from; // 'YYYY-MM-DD'
-  if (from && today() < from) {
-    const [, m, d] = from.split("-").map(Number);
+  const from = state.data.balance_from; // ISO-время или 'YYYY-MM-DD'
+  const fromMs = from ? Date.parse(from.length === 10 ? `${from}T00:00:00+03:00` : from) : NaN;
+  const [, fm, fd] = from ? from.slice(0, 10).split("-").map(Number) : [];
+  if (from && Date.now() < fromMs) {
     return `<div class="label">Итог · ${ymTitle(state.ym)}</div>
       <div class="big num">${signed(monthNet, state.cur)}</div>
-      <div class="others">Общий баланс считается с ${d} ${MONTHS_GEN[m - 1]}</div>`;
+      <div class="others">Общий баланс считается с ${fd} ${MONTHS_GEN[fm - 1]}</div>`;
   }
-  const since = from ? (() => { const [y, m, d] = from.split("-").map(Number); return ` с ${d} ${MONTHS_GEN[m - 1]} ${y}`; })() : "";
-  return `<div class="label">Баланс${since}</div>
+  const acc = state.data.accounts;
+  if (acc && state.cur === "RUB") {
+    const debt = +acc.credit_debt;
+    return `<div class="label">Деньги</div>
+      <div class="big num">${signed(+acc.cash, "RUB")}</div>
+      ${debt ? `<div class="others num">💳 Кредитки: <b style="color:${debt > 0 ? "var(--danger)" : "var(--inc-text)"}">${debt > 0 ? "−" + money(debt, "RUB") + " долг" : "+" + money(-debt, "RUB")}</b></div>` : ""}
+      ${others.length ? `<div class="others num">${others.join(" · ")}</div>` : ""}
+      ${from ? `<div class="hint" style="margin-top:4px">учёт с ${fd} ${MONTHS_GEN[fm - 1]}</div>` : ""}`;
+  }
+  return `<div class="label">Баланс</div>
     <div class="big num">${signed(balance, state.cur)}</div>
     ${others.length ? `<div class="others num">${others.join(" · ")}</div>` : ""}`;
 }
@@ -632,7 +641,7 @@ function operations(items) {
           <span class="ico">${icon(t.category)}</span>
           <div class="grow">
             <div class="t">${esc(t.note || t.category)}</div>
-            <div class="s">${t.note ? esc(t.category) + " · " : ""}${msk(new Date(t.created_at)).time}</div>
+            <div class="s">${t.note ? esc(t.category) + " · " : ""}${msk(new Date(t.created_at)).time}${t.account === "credit" ? " · 💳 кредиткой" : ""}</div>
           </div>
           <span class="amt num ${t.kind === "income" ? "inc" : ""}">${t.kind === "income" ? "+" : "−"}${money(t.amount, t.currency)}</span>
         </button>`).join("")}
@@ -865,6 +874,7 @@ function openSheet(tx) {
     category: tx ? tx.category : null,
     note: tx ? tx.note || "" : "",
     date: tx ? msk(new Date(tx.created_at)).day : today(),
+    account: tx ? tx.account || "cash" : "cash",
   };
   showSheet();
   if (!tx) setTimeout(() => $sheet.querySelector("#amt")?.focus(), 250);
@@ -894,6 +904,12 @@ function renderSheet() {
       <span class="sym">${SYM[s.currency]}</span>
     </div>
     <div class="chips">${Object.keys(SYM).map((c) => `<button class="chip" data-sact="cur" data-v="${c}" aria-pressed="${c === s.currency}">${SYM[c]} ${c}</button>`).join("")}</div>
+    ${s.kind === "expense" ? `
+      <div class="field-label">Чем оплачено</div>
+      <div class="seg" style="margin-top:0">
+        <button data-sact="acc" data-v="cash" aria-pressed="${s.account !== "credit"}">💵 Из кармана</button>
+        <button data-sact="acc" data-v="credit" aria-pressed="${s.account === "credit"}">💳 Кредиткой</button>
+      </div>` : ""}
 
     <div class="field-label">Категория</div>
     <div class="cats">${list.map(([c, ic]) => `<button class="cat" data-sact="cat" data-v="${esc(c)}" aria-pressed="${c === s.category}"><span>${ic}</span><span>${esc(c)}</span></button>`).join("")}</div>
@@ -941,6 +957,7 @@ $sheet.addEventListener("click", (e) => {
       if (s.kind !== v) { s.kind = v; if (!CATS[v].some(([c]) => c === s.category)) s.category = null; renderSheet(); }
       break;
     case "cur": s.currency = v; renderSheet(); break;
+    case "acc": s.account = v; renderSheet(); break;
     case "cat": s.category = v; $sheet.querySelectorAll(".cat").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === v)); break;
     case "grp": s.grp = v; renderSheet(); break;
     case "active": s.active = v === "1"; renderSheet(); break;
@@ -974,7 +991,7 @@ async function save() {
   const amount = parseFloat(s.amount.replace(/\s/g, "").replace(",", "."));
   if (!(amount > 0)) { haptic("error"); return alertMsg("Введи сумму"); }
   if (!s.category) { haptic("error"); return alertMsg("Выбери категорию"); }
-  const tx = { kind: s.kind, amount, currency: s.currency, category: s.category, note: s.note.trim() };
+  const tx = { kind: s.kind, amount, currency: s.currency, category: s.category, note: s.note.trim(), account: s.kind === "expense" ? s.account : "cash" };
   if (s.orig) {
     tx.created_at = s.date === msk(new Date(s.orig.created_at)).day ? s.orig.created_at : `${s.date}T12:00:00+03:00`;
   } else if (s.date !== today()) {
