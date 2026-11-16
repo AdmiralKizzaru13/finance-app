@@ -796,8 +796,26 @@ function studentForm(s, title, inline = false) {
       </div>
       <div class="hint" style="margin:8px 4px">Кто не ходит — скрывается из списка, история оплат сохраняется. Новая сумма оплаты действует для следующих отметок.</div>` : ""}
     ${inline
-      ? `<button class="addbtn" data-sact="save-st">Сохранить данные</button>`
+      ? `<button class="addbtn" data-sact="save-st">Сохранить данные</button>
+         <button class="del" data-sact="del-st">🗑 Удалить ученика</button>`
       : `<button class="savebtn" data-sact="save">Сохранить</button>`}`;
+}
+
+function deleteStudent() {
+  const s = state.sheet;
+  if (!s || !s.id || busy) return;
+  const st = state.data.students.find((x) => x.id === s.id) || s;
+  confirmMsg(`Удалить ученика ${st.name} насовсем? Полученные от него деньги останутся в доходах. Если он просто перестал ходить — лучше выбрать «Не ходит».`, async (ok) => {
+    if (!ok) return;
+    busy = true; progress(true);
+    try {
+      await api("student_delete", { id: s.id });
+      haptic("success");
+      closeSheet();
+      await load();
+    } catch (e) { haptic("error"); alertMsg(e.message); }
+    finally { busy = false; progress(false); }
+  });
 }
 
 async function payFromSheet() {
@@ -963,6 +981,7 @@ $sheet.addEventListener("click", (e) => {
     case "active": s.active = v === "1"; renderSheet(); break;
     case "edit": s.edit = true; renderSheet(); setTimeout(() => $sheet.querySelector("#st-name")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); break;
     case "save-st": saveStudent(); break;
+    case "del-st": deleteStudent(); break;
     case "pay": payFromSheet(); break;
     case "unpay": unpayFromSheet(); break;
     case "cl-ses": clientAction("client_session", { id: s.id }); break;
