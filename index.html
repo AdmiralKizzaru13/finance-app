@@ -103,6 +103,10 @@
   .row1 .amt { font-weight: 600; white-space: nowrap; }
   .bar { height: 6px; border-radius: 3px; background: var(--track); margin-top: 6px; overflow: hidden; }
   .bar i { display: block; height: 100%; border-radius: 3px; }
+  .goal + .goal { margin-top: 14px; padding-top: 12px; border-top: 0.5px solid var(--sep); }
+  .gbar { position: relative; height: 10px; border-radius: 5px; background: var(--track); margin: 8px 0 6px; }
+  .gbar .fill { display: block; height: 100%; border-radius: 5px; max-width: 100%; }
+  .gbar .gmark { position: absolute; top: -3px; width: 2px; height: 16px; border-radius: 1px; background: var(--hint); }
   .pct { width: 38px; text-align: right; color: var(--hint); font-size: 13px; flex: none; }
 
   /* график */
@@ -367,6 +371,7 @@ function heroBlock(balance, others, monthNet) {
     const debt = +acc.credit_debt;
     return `<div class="label">Деньги</div>
       <div class="big num">${signed(+acc.cash, "RUB")}</div>
+      ${+acc.reserve ? `<div class="others num">🏦 Подушка: <b>${money(+acc.reserve, "RUB")}</b></div>` : ""}
       ${debt ? `<div class="others num">💳 Кредитки: <b style="color:${debt > 0 ? "var(--danger)" : "var(--inc-text)"}">${debt > 0 ? "−" + money(debt, "RUB") + " долг" : "+" + money(-debt, "RUB")}</b></div>` : ""}
       ${others.length ? `<div class="others num">${others.join(" · ")}</div>` : ""}
       ${from ? `<div class="hint" style="margin-top:4px">учёт с ${fd} ${MONTHS_GEN[fm - 1]}</div>` : ""}`;
@@ -396,11 +401,128 @@ function categoryBlock(items, kind, total, title) {
   </section>`;
 }
 
+// ---------- цели: ученики и подушка ----------
+function goalsOf() {
+  const g = state.data.goals || {};
+  const st = (Array.isArray(g.students) ? g.students : []).map(Number).filter((x) => x > 0).sort((a, b) => a - b);
+  return { students: st.length ? st : [50, 70], reserve: +g.reserve > 0 ? +g.reserve : 700000 };
+}
+
+function goalsBlock() {
+  const d = state.data;
+  if (state.ym !== curYm() || state.cur !== "RUB" || !d.accounts) return "";
+  const g = goalsOf();
+  const n = (d.students || []).filter((s) => s.active).length;
+  const top = g.students[g.students.length - 1];
+  const next = g.students.find((x) => x > n);
+  const r = +(d.accounts.reserve || 0);
+  const marks = g.students.slice(0, -1).map((x) => `<span class="gmark" style="left:${(x / top) * 100}%"></span>`).join("");
+  const steps = g.students.map((x) => (n >= x ? `✅ ${x}` : x === next ? `🎯 ${x}` : `${x}`)).join(" → ");
+  return `<section class="card">
+    <div class="row1"><h2 style="margin:0">🎯 Цели</h2><button class="chip" data-act="goals-edit">Изменить</button></div>
+    <div class="goal" style="margin-top:10px">
+      <div class="row1"><span>👥 Учеников</span><span class="num"><b>${n}</b> <span class="hint">· ${steps}</span></span></div>
+      <div class="gbar"><span class="fill" style="width:${Math.min(100, (n / top) * 100)}%;background:var(--inc)"></span>${marks}</div>
+      <div class="hint">${next ? `до ${next} — ещё ${next - n}` : "все цели взяты 🎉"}</div>
+    </div>
+    <div class="goal">
+      <div class="row1"><span>🏦 Подушка</span><span class="num"><b>${money(r, "RUB")}</b> <span class="hint">из ${money(g.reserve, "RUB")}</span></span></div>
+      <div class="gbar"><span class="fill" style="width:${Math.min(100, Math.max(0, (r / g.reserve) * 100))}%;background:var(--accent)"></span></div>
+      <div class="hint">${Math.round((r / g.reserve) * 100)}% · деньги на «если что»</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="chip" data-act="sav" data-v="1" style="white-space:nowrap">＋ Отложить</button>
+        ${r > 0 ? `<button class="chip" data-act="sav" data-v="-1" style="white-space:nowrap">Взять в карман</button>` : ""}
+      </div>
+    </div>
+  </section>`;
+}
+
+function openSavingsSheet(dir) {
+  state.sheet = { type: "savings", dir, amount: "", note: "" };
+  showSheet();
+  setTimeout(() => $sheet.querySelector("#sv-amt")?.focus(), 250);
+}
+
+function renderSavingsSheet() {
+  const s = state.sheet;
+  const r = +(state.data.accounts?.reserve || 0);
+  const list = (state.data.savings || []).slice(0, 15);
+  const dt = (iso) => new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
+  $sheet.className = "open";
+  $sheet.innerHTML = `
+    <h2 style="margin:6px 4px 4px;font-size:20px">🏦 Подушка · ${money(r, "RUB")}</h2>
+    <div class="seg" style="margin-top:8px">
+      <button data-sact="sv-dir" data-v="1" aria-pressed="${s.dir > 0}">Отложить</button>
+      <button data-sact="sv-dir" data-v="-1" aria-pressed="${s.dir < 0}">Взять в карман</button>
+    </div>
+    <div class="amount"><input id="sv-amt" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(s.amount)}" aria-label="Сумма"><span class="sym">₽</span></div>
+    <div class="hint" style="text-align:center">${s.dir > 0 ? "Деньги уйдут из кармана в подушку. В расходы не считается." : `Вернутся из подушки в карман. Доступно ${money(r, "RUB")}.`}</div>
+    <div class="field-label">Комментарий</div>
+    <input id="sv-note" class="inp" maxlength="200" placeholder="Необязательно" value="${esc(s.note)}">
+    <button class="savebtn" data-sact="save">${s.dir > 0 ? "Отложить" : "Взять"}</button>
+    <div class="field-label">История</div>
+    <div class="list">${list.length ? list.map((x) => `
+      <div class="tx strow"><span class="grow">${+x.amount > 0 ? "⬆️ Отложил" : "⬇️ Взял"} · ${dt(x.created_at)}${x.note ? ` · ${esc(x.note)}` : ""}</span>
+        <span class="amt num ${+x.amount > 0 ? "inc" : ""}" style="margin-right:8px">${+x.amount > 0 ? "+" : "−"}${money(Math.abs(+x.amount), "RUB")}</span>
+        <button class="chip" data-sact="sv-del" data-v="${x.id}" aria-label="Удалить">✕</button></div>`).join("")
+      : `<div class="tx strow"><span class="hint">Пока ничего не отложено</span></div>`}</div>`;
+}
+
+async function saveSavings() {
+  const s = state.sheet;
+  const amount = parseFloat(String(s.amount).replace(/\s/g, "").replace(",", "."));
+  if (!(amount > 0)) { haptic("error"); return alertMsg("Введи сумму"); }
+  busy = true; progress(true);
+  try {
+    await api("savings_add", { amount: s.dir * amount, note: s.note });
+    haptic("success");
+    closeSheet();
+    await load();
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
+}
+
+function openGoalsSheet() {
+  const g = goalsOf();
+  state.sheet = { type: "goals", students: g.students.join(", "), reserve: String(g.reserve) };
+  showSheet();
+}
+
+function renderGoalsSheet() {
+  const s = state.sheet;
+  $sheet.className = "open";
+  $sheet.innerHTML = `
+    <h2 style="margin:6px 4px 4px;font-size:20px">🎯 Цели</h2>
+    <div class="field-label">Учеников — ступени через запятую</div>
+    <input id="g-st" class="inp" inputmode="numeric" autocomplete="off" placeholder="50, 70" value="${esc(s.students)}">
+    <div class="field-label">Подушка, ₽</div>
+    <input id="g-res" class="inp" inputmode="numeric" autocomplete="off" placeholder="700000" value="${esc(s.reserve)}">
+    <div class="hint" style="margin:8px 4px">Подушка — запас примерно на 3 месяца расходов на случай «если что».</div>
+    <button class="savebtn" data-sact="save">Сохранить</button>`;
+}
+
+async function saveGoals() {
+  const s = state.sheet;
+  const students = String(s.students).split(/[^\d]+/).map(Number).filter((x) => x > 0);
+  const reserve = Number(String(s.reserve).replace(/\D/g, ""));
+  if (!students.length) { haptic("error"); return alertMsg("Укажи цель по ученикам, например 50, 70"); }
+  if (!(reserve > 0)) { haptic("error"); return alertMsg("Укажи сумму подушки"); }
+  busy = true; progress(true);
+  try {
+    await api("goals_save", { students, reserve });
+    haptic("success");
+    closeSheet();
+    await load();
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
+}
+
 function overview(items, inc, exp) {
   const empty = !items.length
     ? `<section class="card"><div class="empty" style="padding:20px 8px"><div class="e">🪙</div>В этом месяце записей нет.<br>Нажми «Добавить запись» или напиши боту <code>350 кофе</code></div></section>`
     : "";
   return `${empty}
+    ${goalsBlock()}
     ${monthSummary(inc, exp)}
     ${categoryBlock(items, "expense", exp, "Расходы по категориям")}
     ${categoryBlock(items, "income", inc, "Доходы по категориям")}
@@ -1030,6 +1152,8 @@ function renderSheet() {
   const s = state.sheet;
   if (s.type === "student") return renderStudentSheet();
   if (s.type === "client") return renderClientSheet();
+  if (s.type === "savings") return renderSavingsSheet();
+  if (s.type === "goals") return renderGoalsSheet();
   const list = CATS[s.kind].slice();
   if (s.category && !list.some(([c]) => c === s.category)) list.unshift([s.category, icon(s.category)]);
   $sheet.className = `open kind-${s.kind === "income" ? "inc" : "exp"}`;
@@ -1074,6 +1198,15 @@ $sheet.addEventListener("input", (e) => {
   if (e.target.id === "note") s.note = e.target.value;
   if (e.target.id === "date") s.date = e.target.value || today();
   if (e.target.id === "st-name" || e.target.id === "cl-name") s.name = e.target.value;
+  if (e.target.id === "sv-amt") {
+    const v = e.target.value.replace(/[^\d.,\s]/g, "");
+    if (v !== e.target.value) e.target.value = v;
+    s.amount = v;
+    syncButtons();
+  }
+  if (e.target.id === "sv-note") s.note = e.target.value;
+  if (e.target.id === "g-st") s.students = e.target.value;
+  if (e.target.id === "g-res") s.reserve = e.target.value;
   if (e.target.id === "cl-price") {
     const v = e.target.value.replace(/[^\d.,\s]/g, "");
     if (v !== e.target.value) e.target.value = v;
@@ -1114,6 +1247,12 @@ $sheet.addEventListener("click", (e) => {
     case "save-st": saveStudent(); break;
     case "del-st": deleteStudent(); break;
     case "skip": skipStudent(v === "1"); break;
+    case "sv-dir": s.dir = +v; renderSheet(); syncButtons(); break;
+    case "sv-del": confirmMsg("Удалить эту запись подушки?", async (ok) => {
+      if (!ok) return;
+      try { await api("savings_delete", { id: +v }); haptic("success"); await load(); if (state.sheet) { renderSheet(); syncButtons(); } }
+      catch (err) { haptic("error"); alertMsg(err.message); }
+    }); break;
     case "pay": payFromSheet(); break;
     case "unpay": unpayFromSheet(); break;
     case "cl-ses": clientAction("client_session", { id: s.id }); break;
@@ -1143,6 +1282,8 @@ async function save() {
   const s = state.sheet;
   if (!s || busy) return;
   if (s.type === "client") return s.id ? clientAction("client_session", { id: s.id }) : saveClient();
+  if (s.type === "savings") return saveSavings();
+  if (s.type === "goals") return saveGoals();
   if (s.type === "student") {
     if (!s.id) return saveStudent();
     if (!sheetPayment() && !(state.data.skips || []).includes(s.id)) return payFromSheet();
@@ -1204,6 +1345,8 @@ $app.addEventListener("click", (e) => {
     case "st-new": openStudentSheet(null); break;
     case "cl-open": openClientSheet(+v); break;
     case "cl-new": openClientSheet(null); break;
+    case "goals-edit": openGoalsSheet(); break;
+    case "sav": openSavingsSheet(+v); break;
     case "cl-ses": clientAction("client_session", { id: +v }); break;
     case "st-edit": {
       const st = (state.data.students || []).find((x) => String(x.id) === v);
@@ -1239,6 +1382,11 @@ function syncButtons() {
         const amt = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
         text = sheetPayment() || (state.data.skips || []).includes(s.id) ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
       } else if (s.type === "student") text = "Добавить ученика";
+      if (s.type === "savings") {
+        const amt = parseFloat(String(s.amount).replace(/\s/g, "").replace(",", "."));
+        text = `${s.dir > 0 ? "Отложить" : "Взять"}${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
+      }
+      if (s.type === "goals") text = "Сохранить цели";
       if (s.type === "client") {
         const c = s.id && (state.data.clients || []).find((x) => x.id === s.id);
         text = !s.id ? "Добавить клиента" : `＋ Тренировка${c && c.mode === "single" ? ` · ${money(c.price, "RUB")}` : ""}`;
