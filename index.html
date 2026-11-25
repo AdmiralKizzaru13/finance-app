@@ -525,27 +525,40 @@ function studentsTab() {
 }
 
 // ---------- фитнес: персональные клиенты ----------
+// Тренировки клиента в выбранном месяце (по московскому времени)
+const ymOf = (iso) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit" }).format(new Date(iso)).slice(0, 7);
+const clientMonthSessions = (c) => (state.data.client_sessions || []).filter((x) => x.client_id === c.id && ymOf(x.done_at) === state.ym);
+const plTr = (n) => n % 10 === 1 && n % 100 !== 11 ? "тренировка" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "тренировки" : "тренировок";
+const MONTHS_PREP = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
+
 function clientRemainText(c) {
+  const ice = c.frozen_at ? "❄️ На заморозке · " : "";
+  if (c.mode === "single") {
+    const n = clientMonthSessions(c).length;
+    return `<span class="s">${ice}В ${MONTHS_PREP[+state.ym.slice(5) - 1]}: <b>${n}</b> трен. · ${money(n * c.price, "RUB")}</span>`;
+  }
   const r = +c.remaining;
+  if (c.frozen_at) return `<span class="s">${ice}осталось <b>${r}</b> из ${c.sessions}</span>`;
   if (r > 0) return `<span class="s">Осталось <b>${r}</b> из ${c.sessions} тренировок</span>`;
   if (r === 0) return `<span class="s late">Пакет закончился — ждём оплату ${money(c.price, "RUB")}</span>`;
   return `<span class="s late">В долг ${-r} трен. — ждём оплату ${money(c.price, "RUB")}</span>`;
 }
+const clientKind = (c) => c.mode === "single" ? `разово · ${money(c.price, "RUB")} за тренировку` : `пакет ${money(c.price, "RUB")} = ${c.sessions} трен.`;
 
 function clientsBlock() {
   const list = (state.data.clients || []).filter((c) => c.active);
-  if (!list.length) return "";
   return `<div class="day" style="margin-top:24px">
-    <div class="dayhead"><span>🏋️ Фитнес · персональные</span><span>${money(list[0].price, "RUB")} = ${list[0].sessions} трен.</span></div>
-    <div class="list">${list.map((c) => `
-      <div class="tx strow">
+    <div class="dayhead"><span>🏋️ Фитнес · персональные</span><span></span></div>
+    ${list.length ? `<div class="list">${list.map((c) => `
+      <div class="tx strow"${c.frozen_at ? ' style="opacity:.6"' : ""}>
         <button class="st-info" data-act="cl-open" data-v="${c.id}">
-          <div class="t">${esc(c.name)}</div>
+          <div class="t">${esc(c.name)} <span class="hint">· ${clientKind(c)}</span></div>
           <div class="s">${clientRemainText(c)}</div>
         </button>
         <button class="chip" data-act="cl-ses" data-v="${c.id}" style="flex:none">＋ трен.</button>
       </div>`).join("")}
-    </div></div>`;
+    </div>` : ""}
+    <button class="addbtn" data-act="cl-new">＋ Добавить клиента</button></div>`;
 }
 
 const clBusy = new Set();
@@ -563,41 +576,118 @@ async function clientAction(action, payload, okMsg) {
 }
 
 function openClientSheet(id) {
-  state.sheet = { type: "client", id };
+  const c = id ? (state.data.clients || []).find((x) => x.id === id) : null;
+  state.sheet = {
+    type: "client", id: c ? c.id : null, edit: !c,
+    name: c ? c.name : "", mode: c ? c.mode : "single",
+    price: c ? String(+c.price).replace(".", ",") : "", sessions: c ? String(c.sessions) : "12",
+  };
   showSheet();
+  if (!c) setTimeout(() => $sheet.querySelector("#cl-name")?.focus(), 250);
+}
+
+function clientForm(s) {
+  return `
+    <h2 style="margin:${s.id ? "24px" : "6px"} 4px 4px;font-size:${s.id ? "17px" : "20px"}">${s.id ? "Данные клиента" : "Новый клиент"}</h2>
+    <div class="field-label">Имя</div>
+    <input id="cl-name" class="inp" maxlength="80" autocomplete="off" placeholder="Например, Костя" value="${esc(s.name)}">
+    <div class="field-label">Как платит</div>
+    <div class="seg" style="margin-top:0">
+      <button data-sact="cl-mode" data-v="single" aria-pressed="${s.mode === "single"}">За каждую тренировку</button>
+      <button data-sact="cl-mode" data-v="package" aria-pressed="${s.mode === "package"}">Пакетом</button>
+    </div>
+    <div class="field-label">${s.mode === "single" ? "Цена тренировки, ₽" : "Цена пакета, ₽"}</div>
+    <input id="cl-price" class="inp" inputmode="decimal" autocomplete="off" placeholder="${s.mode === "single" ? "1500" : "15000"}" value="${esc(s.price)}">
+    ${s.mode === "package" ? `
+      <div class="field-label">Тренировок в пакете</div>
+      <input id="cl-sessions" class="inp" inputmode="numeric" autocomplete="off" placeholder="12" value="${esc(s.sessions)}">` : ""}
+    <div class="hint" style="margin:8px 4px">${s.mode === "single"
+      ? "Каждая отмеченная тренировка сразу добавляет доход."
+      : "Оплату пакета отмечаешь отдельно, тренировки списываются из пакета."}</div>
+    ${s.id
+      ? `<button class="addbtn" data-sact="cl-save">Сохранить данные</button>
+         <button class="del" data-sact="cl-del">🗑 Удалить клиента</button>`
+      : `<button class="savebtn" data-sact="cl-save">Добавить клиента</button>`}`;
 }
 
 function renderClientSheet() {
   const s = state.sheet;
-  const c = (state.data.clients || []).find((x) => x.id === s.id);
   $sheet.className = "open";
+  if (!s.id) { $sheet.innerHTML = clientForm(s); return; }
+  const c = (state.data.clients || []).find((x) => x.id === s.id);
   if (!c) { $sheet.innerHTML = `<div class="empty">Клиент не найден</div>`; return; }
+  const single = c.mode === "single";
   const ses = (state.data.client_sessions || []).filter((x) => x.client_id === c.id).slice(0, 20);
   const pays = (state.data.client_payments || []).filter((x) => x.client_id === c.id).slice(0, 10);
   const dt = (iso) => new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
   const r = +c.remaining;
+  const monthN = clientMonthSessions(c).length;
+  const mon = MONTHS_PREP[+state.ym.slice(5) - 1];
+  const counter = single
+    ? `<div class="num" style="font-size:44px;font-weight:800;line-height:1">${monthN}</div>
+       <div class="hint" style="margin-top:6px">${plTr(monthN)} в ${mon} · <b style="color:var(--inc-text)">+${money(monthN * c.price, "RUB")}</b> · всего ${c.done}</div>`
+    : `<div class="num" style="font-size:44px;font-weight:800;line-height:1;${r <= 0 && !c.frozen_at ? "color:var(--danger)" : ""}">${r}</div>
+       <div class="hint" style="margin-top:6px">${r >= 0 ? "осталось тренировок" : "тренировок в долг"} · проведено всего ${c.done}</div>`;
   $sheet.innerHTML = `
     <div style="padding:6px 4px 0">
-      <div style="font-size:22px;font-weight:700">${esc(c.name)}</div>
-      <div class="hint" style="margin-top:2px">Пакет ${money(c.price, "RUB")} = ${c.sessions} тренировок</div>
+      <div style="font-size:22px;font-weight:700">${esc(c.name)}${c.frozen_at ? " ❄️" : ""}</div>
+      <div class="hint" style="margin-top:2px">${single ? `Разово · ${money(c.price, "RUB")} за тренировку` : `Пакет ${money(c.price, "RUB")} = ${c.sessions} тренировок`}</div>
     </div>
-    <div class="card" style="text-align:center;padding:20px 16px">
-      <div class="num" style="font-size:44px;font-weight:800;line-height:1;${r <= 0 ? "color:var(--danger)" : ""}">${r}</div>
-      <div class="hint" style="margin-top:6px">${r >= 0 ? "осталось тренировок" : "тренировок в долг"} · проведено всего ${c.done}</div>
-    </div>
-    <button class="addbtn" data-sact="cl-pay" style="color:var(--inc-text)">💰 Оплатил пакет · ${money(c.price, "RUB")}</button>
+    ${c.frozen_at ? `<div class="card" style="padding:12px 16px;margin-bottom:0">❄️ На заморозке с ${dt(c.frozen_at)}${single ? "" : ` — оставшиеся ${r} трен. сохранятся`}. Отметишь тренировку — заморозка снимется сама.</div>` : ""}
+    <div class="card" style="text-align:center;padding:20px 16px">${counter}</div>
+    ${single ? "" : `<button class="addbtn" data-sact="cl-pay" style="color:var(--inc-text)">💰 Оплатил пакет · ${money(c.price, "RUB")}</button>`}
+    <button class="addbtn" data-sact="cl-freeze">${c.frozen_at ? "▶️ Разморозить" : "❄️ Заморозить"}</button>
     <div class="field-label">Тренировки</div>
     <div class="list">${ses.length ? ses.map((x) => `
       <div class="tx strow"><span class="grow">🏋️ ${dt(x.done_at)}</span>
+        ${single ? `<span class="amt num inc" style="margin-right:8px">+${money(c.price, "RUB")}</span>` : ""}
         <button class="chip" data-sact="cl-del-ses" data-v="${x.id}" aria-label="Удалить тренировку">✕</button></div>`).join("")
       : `<div class="tx strow"><span class="hint">Пока нет</span></div>`}</div>
-    <div class="field-label">Оплаты</div>
+    ${single ? "" : `<div class="field-label">Оплаты</div>
     <div class="list">${pays.length ? pays.map((x) => `
       <div class="tx strow"><span class="grow">💰 ${dt(x.created_at)} · ${x.sessions} трен.</span>
         <span class="amt num inc" style="margin-right:8px">+${money(x.amount, "RUB")}</span>
         <button class="chip" data-sact="cl-del-pay" data-v="${x.id}" aria-label="Удалить оплату">✕</button></div>`).join("")
-      : `<div class="tx strow"><span class="hint">Пока нет</span></div>`}</div>
-    <button class="savebtn" data-sact="cl-ses">＋ Тренировка</button>`;
+      : `<div class="tx strow"><span class="hint">Пока нет</span></div>`}</div>`}
+    ${s.edit ? clientForm(s) : `<button class="addbtn" data-sact="cl-edit">✏️ Изменить данные клиента</button>`}
+    <button class="savebtn" data-sact="cl-ses">＋ Тренировка${single ? ` · ${money(c.price, "RUB")}` : ""}</button>`;
+}
+
+async function saveClient() {
+  const s = state.sheet;
+  if (!s || busy) return;
+  const price = parseFloat(String(s.price).replace(/\s/g, "").replace(",", "."));
+  const sessions = parseInt(s.sessions, 10);
+  if (!s.name.trim()) { haptic("error"); return alertMsg("Введи имя"); }
+  if (!(price > 0)) { haptic("error"); return alertMsg("Введи цену"); }
+  if (s.mode === "package" && !(sessions >= 1)) { haptic("error"); return alertMsg("Сколько тренировок в пакете?"); }
+  busy = true; progress(true);
+  try {
+    const r = await api("client_save", { client: { id: s.id, name: s.name, mode: s.mode, price, sessions } });
+    haptic("success");
+    if (!s.id) s.id = r.id;
+    s.edit = false;
+    await load();
+    if (state.sheet) { renderSheet(); syncButtons(); }
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
+}
+
+function deleteClient() {
+  const s = state.sheet;
+  const c = s && (state.data.clients || []).find((x) => x.id === s.id);
+  if (!c || busy) return;
+  confirmMsg(`Удалить клиента ${c.name} насовсем? Полученные от него деньги останутся в доходах. Если это пауза — лучше «Заморозить».`, async (ok) => {
+    if (!ok) return;
+    busy = true; progress(true);
+    try {
+      await api("client_delete", { id: c.id });
+      haptic("success");
+      closeSheet();
+      await load();
+    } catch (e) { haptic("error"); alertMsg(e.message); }
+    finally { busy = false; progress(false); }
+  });
 }
 
 const payBusy = new Set();
@@ -952,7 +1042,17 @@ $sheet.addEventListener("input", (e) => {
   }
   if (e.target.id === "note") s.note = e.target.value;
   if (e.target.id === "date") s.date = e.target.value || today();
-  if (e.target.id === "st-name") s.name = e.target.value;
+  if (e.target.id === "st-name" || e.target.id === "cl-name") s.name = e.target.value;
+  if (e.target.id === "cl-price") {
+    const v = e.target.value.replace(/[^\d.,\s]/g, "");
+    if (v !== e.target.value) e.target.value = v;
+    s.price = v;
+  }
+  if (e.target.id === "cl-sessions") {
+    const v = e.target.value.replace(/\D/g, "");
+    if (v !== e.target.value) e.target.value = v;
+    s.sessions = v;
+  }
   if (e.target.id === "pay-amt") {
     const v = e.target.value.replace(/[^\d.,\s]/g, "");
     if (v !== e.target.value) e.target.value = v;
@@ -985,6 +1085,15 @@ $sheet.addEventListener("click", (e) => {
     case "pay": payFromSheet(); break;
     case "unpay": unpayFromSheet(); break;
     case "cl-ses": clientAction("client_session", { id: s.id }); break;
+    case "cl-mode": s.mode = v; renderSheet(); break;
+    case "cl-edit": s.edit = true; renderSheet(); setTimeout(() => $sheet.querySelector("#cl-name")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); break;
+    case "cl-save": saveClient(); break;
+    case "cl-del": deleteClient(); break;
+    case "cl-freeze": {
+      const c = (state.data.clients || []).find((x) => x.id === s.id);
+      if (c) clientAction("client_freeze", { id: c.id, frozen: !c.frozen_at });
+      break;
+    }
     case "cl-pay": {
       const c = (state.data.clients || []).find((x) => x.id === s.id);
       confirmMsg(`${c ? c.name : "Клиент"} оплатил пакет ${c ? money(c.price, "RUB") : ""}?`, (ok) => ok && clientAction("client_pay", { id: s.id }));
@@ -1001,7 +1110,7 @@ let busy = false;
 async function save() {
   const s = state.sheet;
   if (!s || busy) return;
-  if (s.type === "client") return clientAction("client_session", { id: s.id });
+  if (s.type === "client") return s.id ? clientAction("client_session", { id: s.id }) : saveClient();
   if (s.type === "student") {
     if (!s.id) return saveStudent();
     if (!sheetPayment()) return payFromSheet();
@@ -1062,6 +1171,7 @@ $app.addEventListener("click", (e) => {
     case "stf": state.stFilter = v; haptic("select"); render(); break;
     case "st-new": openStudentSheet(null); break;
     case "cl-open": openClientSheet(+v); break;
+    case "cl-new": openClientSheet(null); break;
     case "cl-ses": clientAction("client_session", { id: +v }); break;
     case "st-edit": {
       const st = (state.data.students || []).find((x) => String(x.id) === v);
@@ -1097,7 +1207,10 @@ function syncButtons() {
         const amt = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
         text = sheetPayment() ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
       } else if (s.type === "student") text = "Добавить ученика";
-      if (s.type === "client") text = "＋ Тренировка";
+      if (s.type === "client") {
+        const c = s.id && (state.data.clients || []).find((x) => x.id === s.id);
+        text = !s.id ? "Добавить клиента" : `＋ Тренировка${c && c.mode === "single" ? ` · ${money(c.price, "RUB")}` : ""}`;
+      }
       tg.MainButton.setParams({ text, is_visible: true, is_active: true });
       tg.BackButton.show();
     } else {
