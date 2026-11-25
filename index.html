@@ -209,7 +209,7 @@ const WEEKDAYS = ["воскресенье","понедельник","вторн�
 const CATS = {
   // как в старом приложении; всё прочее — «Другое» с комментарием
   expense: [["Дом","🏠"],["Жена","👠"],["Кид","👧"],["Тео","🧍"],["Продукты","🛒"],["Обеды","🍽️"],["Зал","🏋️"],
-            ["Аренда зала","🏟️"],["Авто","⛽"],["Такси","🚕"],["Табак","🚬"],["Напитки","🍹"],["Досуг","🎳"],
+            ["Аренда зала","🏟️"],["Помощник","🤝"],["Авто","⛽"],["Такси","🚕"],["Табак","🚬"],["Напитки","🍹"],["Досуг","🎳"],
             ["Аптека","💊"],["Кредит","💳"],["Интернет","🌐"],["Мобильный","📱"],["Другое","📦"]],
   income:  [["Ученики","🎓"],["Зарплата","💼"],["Фитнес-зал","💪"],["Другое","📦"]],
 };
@@ -415,7 +415,8 @@ function overview(items, inc, exp) {
 function studentStats() {
   const d = state.data;
   const paid = new Map((d.payments || []).map((p) => [p.student_id, p]));
-  const list = (d.students || []).filter((s) => s.active || paid.has(s.id));
+  const skip = new Set(d.skips || []);
+  const list = (d.students || []).filter((s) => paid.has(s.id) || (s.active && !skip.has(s.id)));
   const unpaid = list.filter((s) => !paid.has(s.id));
   return { paid, list, unpaid, rest: unpaid.reduce((s, x) => s + +x.fee, 0) };
 }
@@ -464,8 +465,10 @@ function recurringBlock() {
 function studentsTab() {
   const d = state.data, ym = state.ym;
   const paid = new Map((d.payments || []).map((p) => [p.student_id, +p.amount]));
-  const list = (d.students || []).filter((s) => s.active || paid.has(s.id));
-  if (!list.length) {
+  const skip = new Set(d.skips || []);
+  const list = (d.students || []).filter((s) => paid.has(s.id) || (s.active && !skip.has(s.id)));
+  const skipped = (d.students || []).filter((s) => s.active && skip.has(s.id) && !paid.has(s.id));
+  if (!list.length && !skipped.length) {
     return `<div class="empty"><div class="e">🎓</div>Учеников пока нет<br><button class="retry" data-act="st-new">Добавить ученика</button></div>`;
   }
   const cur = curYm(), day = +today().slice(8);
@@ -520,6 +523,12 @@ function studentsTab() {
       <button class="chip" data-act="stf" data-v="unpaid" aria-pressed="${state.stFilter === "unpaid"}">Не оплатили · ${unpaid.length}</button>
     </div>` : ""}
     ${blocks || `<div class="empty">Все оплатили 🎉</div>`}
+    ${skipped.length ? `<div class="day">
+      <div class="dayhead"><span>🚫 Не ходят в этом месяце</span><span class="num">${skipped.length}</span></div>
+      <div class="list">${skipped.map((x) => `<div class="tx strow" style="opacity:.6">
+        <button class="st-info" data-act="st-edit" data-v="${x.id}">
+          <div class="t">${esc(x.name)}</div><div class="s"><span class="s">оплату не ждём · группа ${esc(x.grp)}</span></div>
+        </button><span class="amt num">—</span></div>`).join("")}</div></div>` : ""}
     <button class="addbtn" data-act="st-new">＋ Добавить ученика</button>
     ${clientsBlock()}`;
 }
@@ -837,9 +846,17 @@ function renderStudentSheet() {
 
   const st = state.data.students.find((x) => x.id === s.id) || s;
   const p = sheetPayment();
+  const skipped = !p && (state.data.skips || []).includes(s.id);
   const mon = MONTHS_GEN[+state.ym.slice(5) - 1];
   const phase = state.ym < curYm() ? "past" : state.ym > curYm() ? "future" : +today().slice(8) <= PAY_DEADLINE ? "window" : "late";
-  const payBlock = p
+  const payBlock = skipped
+    ? `<div class="card" style="text-align:center;padding:22px 16px">
+         <div style="font-size:40px;line-height:1">🚫</div>
+         <div style="font-weight:600;margin-top:8px">В ${MONTHS_PREP[+state.ym.slice(5) - 1]} не ходит</div>
+         <div class="hint" style="margin-top:4px">Оплату за этот месяц не ждём, в должниках не числится</div>
+       </div>
+       <button class="addbtn" data-sact="skip" data-v="0">↩️ Вернуть — ждём оплату</button>`
+    : p
     ? `<div class="card" style="text-align:center;padding:22px 16px">
          <div style="font-size:44px;line-height:1">✅</div>
          <div style="font-size:20px;font-weight:700;margin-top:8px" class="num">${money(p.amount, "RUB")}</div>
@@ -854,7 +871,8 @@ function renderStudentSheet() {
          </div>
          <div class="hint" style="text-align:center">Обычная сумма — ${money(st.fee, "RUB")}. Можно изменить, если заплатил другую.</div>
        </div>
-       <button class="savebtn" data-sact="pay" style="background:var(--inc)">✓ Оплатил</button>`;
+       <button class="savebtn" data-sact="pay" style="background:var(--inc)">✓ Оплатил</button>
+       <button class="addbtn" data-sact="skip" data-v="1">🚫 Не ходит в этом месяце</button>`;
 
   $sheet.innerHTML = `
     <div style="padding:6px 4px 0">
@@ -889,6 +907,19 @@ function studentForm(s, title, inline = false) {
       ? `<button class="addbtn" data-sact="save-st">Сохранить данные</button>
          <button class="del" data-sact="del-st">🗑 Удалить ученика</button>`
       : `<button class="savebtn" data-sact="save">Сохранить</button>`}`;
+}
+
+async function skipStudent(on) {
+  const s = state.sheet;
+  if (!s || !s.id || busy) return;
+  busy = true; progress(true);
+  try {
+    await api("student_skip", { id: s.id, ym: state.ym, skip: on });
+    haptic("success");
+    await load();
+    if (state.sheet) { renderSheet(); syncButtons(); }
+  } catch (e) { haptic("error"); alertMsg(e.message); }
+  finally { busy = false; progress(false); }
 }
 
 function deleteStudent() {
@@ -1082,6 +1113,7 @@ $sheet.addEventListener("click", (e) => {
     case "edit": s.edit = true; renderSheet(); setTimeout(() => $sheet.querySelector("#st-name")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); break;
     case "save-st": saveStudent(); break;
     case "del-st": deleteStudent(); break;
+    case "skip": skipStudent(v === "1"); break;
     case "pay": payFromSheet(); break;
     case "unpay": unpayFromSheet(); break;
     case "cl-ses": clientAction("client_session", { id: s.id }); break;
@@ -1113,7 +1145,7 @@ async function save() {
   if (s.type === "client") return s.id ? clientAction("client_session", { id: s.id }) : saveClient();
   if (s.type === "student") {
     if (!s.id) return saveStudent();
-    if (!sheetPayment()) return payFromSheet();
+    if (!sheetPayment() && !(state.data.skips || []).includes(s.id)) return payFromSheet();
     return closeSheet();
   }
   const amount = parseFloat(s.amount.replace(/\s/g, "").replace(",", "."));
@@ -1205,7 +1237,7 @@ function syncButtons() {
       let text = s.id ? "Сохранить изменения" : "Сохранить";
       if (s.type === "student" && s.id) {
         const amt = parseFloat(String(s.payAmount).replace(/\s/g, "").replace(",", "."));
-        text = sheetPayment() ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
+        text = sheetPayment() || (state.data.skips || []).includes(s.id) ? "Готово" : `✓ Оплатил${amt > 0 ? ` · ${money(amt, "RUB")}` : ""}`;
       } else if (s.type === "student") text = "Добавить ученика";
       if (s.type === "client") {
         const c = s.id && (state.data.clients || []).find((x) => x.id === s.id);
